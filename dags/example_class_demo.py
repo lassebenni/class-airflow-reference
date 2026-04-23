@@ -11,7 +11,12 @@ under ``dags/<yourname>/`` instead.
 
 from datetime import datetime
 
-from airflow.sdk import dag, task
+# NOTE: the shared class VM runs Airflow 2.9.2, so this DAG uses the
+# Airflow-2.x import path ``airflow.decorators``. The curriculum's
+# Ch4/Ch5/Ch6 DAG snapshots use ``airflow.sdk`` (Airflow 3.x, via Astro)
+# — those need to be rewritten or the VM needs to be upgraded to 3.x
+# before they run on the shared scheduler. Tracked as a follow-up.
+from airflow.decorators import dag, task
 
 
 @dag(
