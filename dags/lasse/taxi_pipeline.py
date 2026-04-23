@@ -50,6 +50,7 @@ Requires:
 import io
 import os
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -57,7 +58,12 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.sdk import dag, get_current_context, task
 
-STUDENT = os.environ.get("AIRFLOW_STUDENT", "default")
+# STUDENT is read from the AIRFLOW_STUDENT env var for local Astro dev
+# (set in .env); on the shared class VM we do not have per-student env
+# vars, so we fall back to the parent directory name — ``dags/<name>/``
+# gives us ``<name>`` as the student identifier. The two paths converge
+# on the same ``airflow_<name>`` schema.
+STUDENT = os.environ.get("AIRFLOW_STUDENT") or Path(__file__).parent.name
 SCHEMA = f"airflow_{STUDENT}"
 TLC_BASE = "https://d37ci6vzurychx.cloudfront.net/trip-data"
 
@@ -154,22 +160,27 @@ def taxi_pipeline():
         df = pd.read_parquet(io.BytesIO(resp.content))
 
         hook = PostgresHook(postgres_conn_id="azure_pg")
-        # DELETE runs through psycopg's raw cursor; to_sql below uses
-        # SQLAlchemy's engine, because pandas.to_sql wants an engine.
-        # Two APIs, same connection pool under the hood.
+        engine = hook.get_sqlalchemy_engine()
+        # On the very first run the raw_trips table does not exist yet,
+        # so a bare DELETE would fail with UndefinedTable. Materialize
+        # an empty table with the correct schema first (no-op on
+        # subsequent runs thanks to if_exists="append"), then DELETE,
+        # then append. DELETE runs through psycopg's raw cursor
+        # because pandas.to_sql wants the SQLAlchemy engine; both
+        # share the same underlying connection pool.
         with hook.get_conn() as conn, conn.cursor() as cur:
             cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{SCHEMA}"')
+        df.head(0).to_sql(
+            "raw_trips", engine, schema=SCHEMA, if_exists="append", index=False,
+        )
+        with hook.get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 f'DELETE FROM "{SCHEMA}".raw_trips '
                 "WHERE to_char(lpep_pickup_datetime, 'YYYY-MM') = %s",
                 (year_month,),
             )
         df.to_sql(
-            "raw_trips",
-            hook.get_sqlalchemy_engine(),
-            schema=SCHEMA,
-            if_exists="append",
-            index=False,
+            "raw_trips", engine, schema=SCHEMA, if_exists="append", index=False,
         )
         return len(df)
 
