@@ -1,0 +1,50 @@
+version: 2
+
+models:
+  - name: fct_trips
+    description: |
+      One row per completed NYC green taxi trip in January 2024, with
+      pickup/dropoff zone attributes folded in (OBT-style mart). Queried
+      directly by dashboards and ad-hoc analysis.
+
+      **Grain:** one row per trip.
+      **Source:** `public.raw_trips` joined to `public.raw_zones` on
+      `pickup_location_id` and `dropoff_location_id`.
+      **Not included:** trips where `pickup_location_id` is NULL (dropped
+      in `stg_trips`); duplicate rows from the TLC source are kept as-is
+      and surfaced by `dbt_utils.unique_combination_of_columns`.
+    columns:
+      - name: pickup_datetime
+        description: Wall-clock time the trip began (America/New_York, no timezone attached).
+        tests: [not_null]
+      - name: dropoff_datetime
+        description: Wall-clock time the trip ended.
+      - name: fare_amount
+        description: Metered fare in USD, not including tip, tolls, or surcharges.
+      - name: tip_amount
+        description: Tip in USD. Non-zero only when payment_type is credit card (1).
+      - name: trip_distance
+        description: Distance in miles as reported by the taximeter.
+      - name: tip_pct
+        description: |
+          `tip_amount / fare_amount`, rounded to 4 decimals. NULL when
+          `fare_amount` is 0 (voided trips, no-charge rides).
+      - name: fare_per_mile
+        description: |
+          `fare_amount / trip_distance`, rounded to 4 decimals. NULL when
+          `trip_distance` is 0 (data-quality anomalies).
+      - name: payment_type_label
+        description: |
+          Human-readable payment method from the TLC code. See the jinja
+          dictionary in `stg_trips.sql` for the 1-6 → label mapping.
+      - name: pickup_borough
+        description: |
+          NYC borough of the pickup zone, joined from `stg_zones.borough`.
+          Values: Manhattan, Brooklyn, Queens, Bronx, Staten Island, EWR,
+          Unknown, NaN, or NULL when `pickup_location_id` did not resolve.
+      - name: pickup_zone
+        description: Human-readable pickup-zone name from `stg_zones.zone`.
+      - name: dropoff_borough
+        description: NYC borough of the dropoff zone.
+      - name: dropoff_zone
+        description: Human-readable dropoff-zone name.

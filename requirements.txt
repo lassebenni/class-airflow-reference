@@ -1,0 +1,10 @@
+# Packages injected into the class VM's Airflow image at container start
+# via _PIP_ADDITIONAL_REQUIREMENTS (see datatrack/bicep/modules/vm-airflow.bicep).
+# Keep this list in sync with the airflowPipRequirements default in the bicep.
+apache-airflow-providers-postgres
+psycopg2-binary
+pyarrow
+pandas
+requests
+dbt-core==1.10.*
+dbt-postgres==1.10.*

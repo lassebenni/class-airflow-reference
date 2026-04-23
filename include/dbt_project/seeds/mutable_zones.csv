@@ -1,0 +1,11 @@
+location_id,borough,zone,service_zone
+1,EWR,Newark Airport,EWR
+4,Manhattan,Alphabet City,Yellow Zone
+13,Manhattan,Battery Park City,Yellow Zone
+87,Manhattan,Financial District North,Yellow Zone
+132,Queens,JFK Airport,Airports
+138,Queens,LaGuardia Airport,Airports
+161,Manhattan,Midtown Center,Yellow Zone
+236,Manhattan,Upper East Side North,Yellow Zone
+264,Unknown,NV,N/A
+265,Unknown,Outside of NYC,N/A

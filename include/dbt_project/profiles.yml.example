@@ -1,0 +1,13 @@
+nyc_taxi:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('PG_HOST', 'hyf-data-pg.postgres.database.azure.com') }}"
+      port: 5432
+      user: "{{ env_var('PG_USER', 'hyfadmin') }}"
+      password: "{{ env_var('PG_PASSWORD') }}"
+      dbname: "{{ env_var('PG_DBNAME', 'team1') }}"
+      schema: "{{ env_var('PG_SCHEMA', 'dev_<your_name>') }}"   # ⚠️ Local dev: replace <your_name> with your first name, lowercase. Airflow: pass PG_SCHEMA via BashOperator env (see README § Running from Airflow).
+      sslmode: require
+      threads: 4

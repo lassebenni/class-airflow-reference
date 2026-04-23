@@ -1,0 +1,14 @@
+# Shared class Airflow repo. Each student owns their own subdirectory.
+# Add your GitHub username next to your subdirectory on your first PR.
+#
+# Format: <path pattern>  @github-username
+#
+# Examples (uncomment and edit):
+# /dags/alice/   @alicegithubuser
+# /dags/bob/     @bobgithubuser
+
+# Teacher owns the reference DAG, the integrity test, and the CI pipeline.
+/dags/example_class_demo.py   @lassebenni
+/tests/                        @lassebenni
+/.github/                      @lassebenni
+/requirements.txt              @lassebenni

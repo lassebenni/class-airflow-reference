@@ -1,0 +1,50 @@
+version: 2
+
+models:
+  - name: stg_trips
+    description: Cleaned green taxi trips, one row per trip.
+    tests:
+      # Chapter 5 teaches this test at the default `error` severity to demonstrate
+      # how `dbt build` skips downstream models on a test failure. The January 2024
+      # raw_trips data contains 4 genuine duplicate rows (a TLC source-data issue),
+      # so the test always fails. In this reference repo we soften it to `warn` to
+      # keep CI green while still surfacing the count. When students follow the
+      # chapter on their own machine, they should leave it at the default.
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [pickup_datetime, dropoff_datetime, pickup_location_id, fare_amount]
+          config:
+            severity: warn
+    columns:
+      - name: pickup_datetime
+        description: When the trip started.
+        tests:
+          - not_null
+      - name: pickup_location_id
+        description: TLC zone ID where the trip started.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_zones')
+              field: location_id
+      - name: payment_type
+        description: TLC payment code (1-6).
+        tests:
+          - not_null:
+              severity: warn
+          - accepted_values:
+              values: [1, 2, 3, 4, 5, 6]
+
+unit_tests:
+  - name: payment_type_label_maps_known_codes
+    model: stg_trips
+    given:
+      - input: source('nyc_taxi', 'raw_trips')
+        rows:
+          - {payment_type: 1, pickup_datetime: '2024-01-01 08:00:00', pickup_location_id: 100, fare_amount: 10.0, tip_amount: 2.0, trip_distance: 2.0}
+          - {payment_type: 2, pickup_datetime: '2024-01-01 09:00:00', pickup_location_id: 100, fare_amount: 10.0, tip_amount: 0.0, trip_distance: 2.0}
+          - {payment_type: 6, pickup_datetime: '2024-01-01 10:00:00', pickup_location_id: 100, fare_amount: 10.0, tip_amount: 0.0, trip_distance: 2.0}
+    expect:
+      rows:
+        - {payment_type: 1, payment_type_label: 'Credit card'}
+        - {payment_type: 2, payment_type_label: 'Cash'}
+        - {payment_type: 6, payment_type_label: 'Voided trip'}

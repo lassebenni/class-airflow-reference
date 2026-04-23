@@ -1,0 +1,12 @@
+version: 2
+
+sources:
+  - name: nyc_taxi
+    description: Raw NYC green taxi trip records and zone lookup, loaded in Week 9.
+    database: team1
+    schema: public
+    tables:
+      - name: raw_trips
+        description: One row per green taxi trip for January 2024 (~57K rows).
+      - name: raw_zones
+        description: NYC taxi zone lookup (265 rows mapping location IDs to boroughs).

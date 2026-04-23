@@ -1,0 +1,13 @@
+version: 2
+
+models:
+  - name: stg_zones
+    description: One row per TLC taxi zone (265 zones total).
+    columns:
+      - name: location_id
+        description: TLC zone ID.
+        tests:
+          - unique
+          - not_null
+      - name: borough
+        description: NYC borough (Manhattan, Brooklyn, Queens, Bronx, Staten Island, EWR, Unknown).

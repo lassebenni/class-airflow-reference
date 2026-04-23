@@ -1,0 +1,37 @@
+name: dbt build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Daily at 06:00 UTC — catches drift even when no PRs land.
+    - cron: "0 6 * * *"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dbt-core + dbt-postgres
+        run: pip install "dbt-core==1.11.*" "dbt-postgres==1.10.*"
+
+      - name: Render profiles.yml from template
+        run: |
+          mkdir -p ~/.dbt
+          sed "s/dev_<your_name>/dev_ci/" profiles.yml.example > ~/.dbt/profiles.yml
+
+      - name: dbt deps
+        run: |
+          if [ -f packages.yml ]; then dbt deps; fi
+
+      - name: dbt build
+        env:
+          PG_PASSWORD: ${{ secrets.PG_PASSWORD }}
+        run: dbt build --select +fct_trips --profiles-dir ~/.dbt
