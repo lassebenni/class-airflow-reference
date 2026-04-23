@@ -3,38 +3,86 @@
 Reference snapshot students can diff their own ``dags/taxi_pipeline.py``
 against if they get stuck. Ends up here after applying:
 
-  - Chapter 4: four-task dependency chain (download -> load -> dbt_run
-    -> dbt_test), per-student schema isolation via ``AIRFLOW_STUDENT``,
+  - Chapter 4: three-task dependency chain (ingest -> dbt_run ->
+    dbt_test), per-student schema isolation via ``AIRFLOW_STUDENT``,
     ``DBT_ENV`` injected through ``BashOperator.env``.
   - Chapter 5: monthly + catchup schedule, ``{{ ds }}``-templated
     download URL, delete-then-append idempotent load.
+  - Chapter 7: ``response.raise_for_status()`` so a TLC 403/404 fails
+    ``ingest_taxi_month`` cleanly instead of silently saving the HTML
+    error body as a "parquet" and blowing up at dbt_run with a cryptic
+    Parquet-magic-bytes error.
+  - Chapter 8: runs on local Astro (Airflow 3 via Astro CLI) and on the
+    shared class VM (same Airflow 3 via Docker Compose) without change.
+    Picks up ``include/dbt_project/`` from either the Astro path or the
+    Docker-Compose path via ``find_dbt_dir()`` below.
+
+Design notes:
+
+  - Download+load are one task (not two) because passing a filesystem
+    path through XCom between tasks is fragile under Airflow 3's
+    TaskSDK (the downstream task sees the path through the
+    ExecutionAPI, and pandas/pyarrow can end up treating it as a
+    Buffer instead of a file). Keeping both in one process sidesteps
+    the whole class of issues: the parquet bytes live in local
+    memory, get read by pandas directly, then land in Postgres.
+  - dbt_run and dbt_test stay separate because they are genuinely
+    distinct units of work — run materializes, test asserts. Seeing
+    ``dbt_test`` red while ``dbt_run`` is green is a load-bearing
+    signal for Ch7 debugging.
 
 Requires:
-  - Astro CLI 1.40+ with apache-airflow-providers-postgres,
-    psycopg2-binary, pyarrow, dbt-core==1.10.*, dbt-postgres==1.10.*
-    in requirements.txt.
-  - AIRFLOW_STUDENT env var set in .env (picks the airflow_<name>
-    schema this DAG writes into).
-  - ``azure_pg`` Airflow Connection pointing at
-    hyf-data-pg.postgres.database.azure.com with sslmode=require.
-  - Week 10 dbt project at ``include/dbt_project/`` (or the
-    ``week-11-airflow`` branch of ``nyc-taxi-dbt-reference``).
+  - Astro CLI 1.40+ (local) or the class shared VM (Airflow 3.2 on
+    Docker Compose) with apache-airflow-providers-postgres,
+    psycopg2-binary, pyarrow, pandas, requests available.
+  - ``AIRFLOW_STUDENT`` env var set (Astro reads ``.env``; the VM
+    takes it from the Docker Compose ``environment`` block) — picks
+    the ``airflow_<name>`` schema this DAG writes into.
+  - ``azure_pg`` Airflow Connection (seeded on the VM via bicep, or
+    added manually in Astro's UI for local dev) pointing at
+    hyf-data-pg.postgres.database.azure.com with ``sslmode=require``.
+  - Week 10 dbt project mounted at ``include/dbt_project/``
+    (Astro: ``/usr/local/airflow/include/dbt_project``;
+    VM:    ``/opt/airflow/include/dbt_project``). The ``DBT_DIR``
+    constant below auto-detects which one is present.
 """
 
+import io
 import os
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 import requests
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.standard.operators.bash import BashOperator
-from airflow.sdk import dag, task
+from airflow.sdk import dag, get_current_context, task
 
 STUDENT = os.environ.get("AIRFLOW_STUDENT", "default")
 SCHEMA = f"airflow_{STUDENT}"
-DBT_DIR = "/usr/local/airflow/include/dbt_project"
 TLC_BASE = "https://d37ci6vzurychx.cloudfront.net/trip-data"
+
+
+def find_dbt_dir() -> str:
+    """Return the dbt project path, picking whichever of the two known
+    Airflow install roots actually has the project on disk.
+
+    Astro CLI mounts ``include/`` at ``/usr/local/airflow/include``.
+    The shared class VM's Docker Compose mounts it at
+    ``/opt/airflow/include``. Students should not have to edit the DAG
+    based on which environment they are running in, so we detect.
+    """
+    for base in ("/usr/local/airflow", "/opt/airflow"):
+        candidate = f"{base}/include/dbt_project"
+        if os.path.isdir(candidate):
+            return candidate
+    # Fall back to the Astro path so the DAG still parses if neither
+    # exists yet (e.g. during first-push). The dbt tasks will fail
+    # fast with a clear "project-dir not found" error, not a
+    # silent-degrade, which is what we want.
+    return "/usr/local/airflow/include/dbt_project"
+
+
+DBT_DIR = find_dbt_dir()
 
 DBT_ENV = {
     "PG_HOST": "{{ conn.azure_pg.host }}",
@@ -58,6 +106,21 @@ def parquet_url_for(ds: str) -> str:
     return f"{TLC_BASE}/green_tripdata_{year_month}.parquet"
 
 
+def _ds_from_context() -> str:
+    """Return the logical-date string for the current task run.
+
+    TaskFlow's ``ds: str`` auto-injection works for *scheduled* runs
+    (``logical_date`` is set to the interval boundary) but breaks for
+    *manual* triggers in Airflow 3, where ``logical_date`` defaults to
+    ``None``. Reading through ``get_current_context()`` with a
+    ``run_after`` fallback is the form that works in both modes.
+    """
+    ctx = get_current_context()
+    dr = ctx["dag_run"]
+    dt = dr.logical_date or dr.run_after
+    return dt.strftime("%Y-%m-%d")
+
+
 @dag(
     dag_id="lasse_taxi_pipeline",
     schedule="@monthly",
@@ -69,17 +132,28 @@ def parquet_url_for(ds: str) -> str:
 )
 def taxi_pipeline():
     @task()
-    def download_taxi_month(ds: str) -> str:
-        year_month = ds[:7]
-        path = f"/tmp/green_tripdata_{year_month}.parquet"
-        Path(path).write_bytes(requests.get(parquet_url_for(ds), timeout=60).content)
-        return path
+    def ingest_taxi_month() -> int:
+        """Download one month of TLC green-taxi data and load it into
+        ``airflow_<student>.raw_trips`` in a single transaction.
 
-    @task()
-    def load_raw_trips(parquet_path: str, ds: str) -> int:
-        df = pd.read_parquet(parquet_path)
-        hook = PostgresHook(postgres_conn_id="azure_pg")
+        Kept as one task (rather than split into download + load)
+        because passing a filesystem path between tasks through XCom
+        is fragile under Airflow 3's TaskSDK. The parquet bytes stay
+        in memory, get read by pandas directly, and are written to
+        Postgres in the same process.
+        """
+        ds = _ds_from_context()
         year_month = ds[:7]
+
+        # raise_for_status() converts a TLC 403/404 (future month,
+        # typo'd path) into a visible Python exception. Without it,
+        # the HTML error body would be saved and pandas would fail
+        # later with a cryptic "Parquet magic bytes not found".
+        resp = requests.get(parquet_url_for(ds), timeout=60)
+        resp.raise_for_status()
+        df = pd.read_parquet(io.BytesIO(resp.content))
+
+        hook = PostgresHook(postgres_conn_id="azure_pg")
         # DELETE runs through psycopg's raw cursor; to_sql below uses
         # SQLAlchemy's engine, because pandas.to_sql wants an engine.
         # Two APIs, same connection pool under the hood.
@@ -112,7 +186,7 @@ def taxi_pipeline():
         append_env=True,
     )
 
-    load_raw_trips(download_taxi_month()) >> dbt_run >> dbt_test
+    ingest_taxi_month() >> dbt_run >> dbt_test
 
 
 taxi_pipeline()
